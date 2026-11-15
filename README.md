@@ -5,7 +5,7 @@ Three campaign types: regular, spin raffle, membership.
 
 ## Where things live
 - **Database + server code**: Supabase project `ner fundraising` (ahtaiifvnplcarbewjve). The schema is in that project's migration history; the server function is `api` (source also in `supabase/functions/api`).
-- **Website**: this folder. `npm install`, `npm run build`, publish the `dist` folder (Cloudflare Pages works as-is; `public/_redirects` handles page routing).
+- **Website**: this folder. `npm install`, `npm run build`, publish the `dist` folder (Cloudflare Workers builds work as-is; `wrangler.jsonc` handles page routing).
 - `.env` holds only public values (Supabase address + publishable key + the default organization).
 
 ## Pages
