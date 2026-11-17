@@ -186,7 +186,7 @@ async function receiptHtml(d: any, org: any, number: string): Promise<string> {
 <p style="margin:0 0 24px;color:#5a5a5a;font-size:15px;line-height:1.65;">Your generous support is deeply appreciated. Please keep this receipt for your records.</p>
 <table width="100%" cellspacing="0" cellpadding="0">
 ${row("Receipt #", escapeHtml(number))}${row("Date", date)}${row("Amount", `<strong>${money(Number(d.amount))}</strong>`)}
-${row("Payment Method", source)}${row("Type", type)}${campaign ? row("Campaign", escapeHtml(campaign)) : ""}${dedication}
+${row("Payment Method", source)}${row("Type", type)}${campaign ? row("Campaign", escapeHtml(campaign)) : ""}${d.ticket_number ? row("Raffle Ticket", `#${d.ticket_number}`) : ""}${dedication}
 </table>
 <p style="margin:24px 0 0;color:#888;font-size:12px;line-height:1.6;">${escapeHtml(org.legal_name || org.name)}${org.tax_id ? " • Tax ID: " + escapeHtml(org.tax_id) : ""}. No goods or services were provided in exchange for this contribution unless noted otherwise.</p>`);
 }

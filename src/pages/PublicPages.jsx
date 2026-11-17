@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import DonateFlow from "@/components/DonateFlow";
+import NerBadge from "@/components/NerBadge";
+import { paymentsReady } from "@/pages/admin/Setup";
 import { useOrg, useCampaigns, useFeed, Spinner } from "@/lib/org";
 import { api, money, supabase } from "@/lib/supabase";
 
@@ -28,8 +30,10 @@ export function DonatePage() {
   if (isLoading) return <Spinner />;
   if (!campaign || !campaign.is_active) return <div className="min-h-screen bg-canvas flex items-center justify-center text-brand/60">This campaign is not available.</div>;
   const amount = parseFloat(params.get("amount"));
+  const open = paymentsReady(org) || (org.donors_fund_enabled && campaign.type === "regular");
   return (
-    <div className="min-h-screen bg-canvas">
+    <div className="min-h-screen bg-canvas pb-16">
+      <NerBadge fixed />
       <div className="bg-white/60 border-b border-brand/10">
         <div className="max-w-3xl mx-auto px-4 py-4">
           <Link to={`/c/${campaign.slug}`} className="inline-flex items-center gap-2 text-brand hover:opacity-70">
@@ -46,7 +50,12 @@ export function DonatePage() {
         </div>
         <Card className="bg-white/90 shadow-xl rounded-2xl">
           <CardContent className="p-6 md:p-8">
-            <DonateFlow org={org} campaign={campaign} mode="web" resumeSpinId={params.get("spin")} prefill={{ amount: amount > 0 ? amount : null, monthly: params.get("monthly") === "1" }} />
+            {!open ? (
+              <div className="text-center py-10 space-y-2">
+                <p className="text-xl font-semibold text-brand">Online donations open soon</p>
+                <p className="text-brand/70">{org.name} is finishing setting up its donation page. Please check back shortly.</p>
+              </div>
+            ) : <DonateFlow org={org} campaign={campaign} mode="web" resumeSpinId={params.get("spin")} prefill={{ amount: amount > 0 ? amount : null, monthly: params.get("monthly") === "1" }} />}
           </CardContent>
         </Card>
         <Footer org={org} />
@@ -91,7 +100,8 @@ export function KioskPage() {
   const goal = Number(campaign.goal_amount || 0);
 
   return (
-    <div className="min-h-screen bg-canvas p-4 md:p-8">
+    <div className="min-h-screen bg-canvas p-4 md:p-8 pb-16">
+      <NerBadge fixed />
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <h1 className="text-2xl font-semibold text-brand">{org.name}</h1>
@@ -132,7 +142,8 @@ export function AllDonationsPage() {
   if (!campaign) return <Navigate to="/" replace />;
   const list = [...(feed?.donations || [])].sort((a, b) => b.amount - a.amount);
   return (
-    <div className="min-h-screen bg-canvas p-6">
+    <div className="min-h-screen bg-canvas p-6 pb-16">
+      <NerBadge fixed />
       <div className="max-w-4xl mx-auto">
         <Link to={`/c/${campaign.slug}`}><Button variant="outline" size="sm" className="mb-4"><ArrowLeft className="w-4 h-4 mr-2" />Back</Button></Link>
         <h1 className="text-3xl font-light text-brand text-center mb-6">{campaign.name}</h1>
@@ -163,6 +174,7 @@ export function ThankYouPage() {
   const c = params.get("c");
   return (
     <div className="min-h-screen bg-canvas flex items-center justify-center px-4">
+      <NerBadge fixed />
       <div className="text-center max-w-md">
         <div className="bg-white rounded-full p-6 inline-block mb-6 shadow"><CheckCircle className="w-20 h-20 text-green-600" /></div>
         <h1 className="text-3xl font-bold text-brand mb-4">Thank You for Your Donation!</h1>
@@ -178,24 +190,32 @@ export function ThankYouPage() {
 
 // ───────────── Admin sign-in: a one-time link sent by email (no passwords to manage) ─────────────
 export function LoginPage() {
-  const { org, session, isAdmin, authChecked, signOut } = useOrg();
+  const { org, session, isAdmin, isPlatformAdmin, authChecked, signOut } = useOrg();
   const [email, setEmail] = useState("");
   const [state, setState] = useState("idle");
   const [error, setError] = useState("");
-  if (session && authChecked && isAdmin) return <Navigate to="/admin" replace />;
+  const home = org ? "/admin" : "/platform";
+  if (session && authChecked && (org ? isAdmin : isPlatformAdmin)) return <Navigate to={home} replace />;
   const send = async (e) => {
     e.preventDefault();
     setState("sending"); setError("");
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: `${window.location.origin}/admin` } });
-    if (error) { setError(error.message); setState("idle"); } else setState("sent");
+    const redirect = `${window.location.origin}${home}`;
+    try {
+      const r = await api("send_login_link", { email: email.trim(), org_slug: org?.slug, redirect });
+      if (r.fallback) {
+        const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: redirect } });
+        if (error) throw error;
+      }
+      setState("sent");
+    } catch (err) { setError(err.message); setState("idle"); }
   };
   return (
     <div className="min-h-screen bg-canvas flex items-center justify-center p-6">
       <Card className="max-w-md w-full"><CardContent className="p-8 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-brand">{org.name} — Admin</h1>
+        <h1 className="text-xl font-semibold text-brand">{org ? `${org.name} — Admin` : "Ner Media — Owner sign-in"}</h1>
         {session && authChecked && !isAdmin ? (
           <>
-            <p className="text-sm text-gray-600">You are signed in as {session.user.email}, which is not an admin of this organization. Ask an existing admin to invite this email.</p>
+            <p className="text-sm text-gray-600">You are signed in as {session.user.email}, which is not an admin here. Ask an existing admin to invite this email.</p>
             <Button variant="outline" onClick={signOut}>Sign out</Button>
           </>
         ) : state === "sent" ? (

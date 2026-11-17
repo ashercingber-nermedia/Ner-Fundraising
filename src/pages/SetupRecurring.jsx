@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { api } from "@/lib/supabase";
+import NerBadge from "@/components/NerBadge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, AlertCircle, ShieldCheck } from "lucide-react";
@@ -106,6 +107,7 @@ export default function SetupRecurring() {
   if (loading) {
     return (
       <div className="min-h-screen bg-canvas flex items-center justify-center">
+      <NerBadge fixed />
         <Loader2 className="w-8 h-8 animate-spin text-brand" />
       </div>
     );

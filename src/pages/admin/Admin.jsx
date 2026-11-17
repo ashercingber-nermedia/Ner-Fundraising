@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useOrg, useCampaigns, Spinner } from "@/lib/org";
+import { paymentsReady } from "@/pages/admin/Setup";
 import { api, money, supabase } from "@/lib/supabase";
 
 export const selectCls = "h-10 rounded-md border border-input bg-white px-3 text-sm";
@@ -23,6 +24,7 @@ export function AdminLayout() {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-lg font-semibold text-brand">{org.name}</h1>
           <nav className="flex gap-1 flex-wrap">
+            <NavLink to="/admin/setup" className={tab}>Setup</NavLink>
             <NavLink to="/admin" end className={tab}>Dashboard</NavLink>
             <NavLink to="/admin/donations" className={tab}>Donations</NavLink>
             <NavLink to="/admin/campaigns" className={tab}>Campaigns</NavLink>
@@ -97,8 +99,14 @@ export function Dashboard() {
     qc.invalidateQueries({ queryKey: ["feed"] });
   };
 
+  const needsSetup = !org.logo_url || !paymentsReady(org);
   return (
     <div className="space-y-6">
+      {needsSetup && (
+        <Link to="/admin/setup" className="block rounded-xl border-2 border-gold bg-white p-4 text-brand hover:bg-gold/10">
+          <strong>Finish setting up your site.</strong> {paymentsReady(org) ? "Add your logo and photos." : "Connect Stripe so your site can take donations."} →
+        </Link>
+      )}
       <div className="grid md:grid-cols-3 gap-4">
         {campaigns.map((c) => {
           const raised = raisedFor(c, donations), goal = Number(c.goal_amount);

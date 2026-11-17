@@ -1,5 +1,9 @@
 # Ner Media Fundraising
 
+Free, self-serve fundraising sites. Anyone can sign up at `give.nermediagroup.com`, type their organization's name,
+and get `their-name.nermediagroup.com` with a "Set up by Ner Media" badge. Raffles (and screens/kiosks) are upgrades
+that Ner Media turns on per organization from the owner page at `give.nermediagroup.com/platform`.
+
 One app for many organizations. Each organization has its own branding, campaigns, admins and Stripe account.
 Three campaign types: regular, spin raffle, membership.
 
@@ -33,3 +37,14 @@ Webhook events needed: `checkout.session.completed`, `payment_intent.succeeded`,
 1. Insert a row in `organizations` (slug, name, address, tax ID, domains).
 2. Add an `org_invites` row with the customer's email; they sign in at `/login`.
 3. They finish Settings (Stripe, logo, colors) and create campaigns.
+
+## Subdomains (one-time Cloudflare setup)
+- DNS record: type `AAAA`, name `*`, content `100::`, proxied.
+- Workers Routes on nermediagroup.com: `*.nermediagroup.com/*` -> worker `ner-fundraising`, and `www.nermediagroup.com/*` -> None (keeps the sales site).
+- Supabase Auth > URL Configuration: Site URL `https://give.nermediagroup.com`; Redirect URLs `https://*.nermediagroup.com/**`.
+
+## Optional platform secrets
+| Name | Purpose |
+|---|---|
+| `DONORS_FUND_API_KEY`, `DONORS_FUND_VALIDATION_TOKEN` | One Donors Fund integration key for every organization (they only enter their charity account number) |
+| `PLATFORM_DOMAIN` | Defaults to `nermediagroup.com` |

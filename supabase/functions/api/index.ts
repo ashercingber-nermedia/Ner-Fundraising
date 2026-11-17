@@ -51,6 +51,13 @@ async function requireAdmin(req: Request, orgId: string) {
   if (!(await isAdmin(user.id, orgId))) fail(403, "Admin access required");
   return user;
 }
+async function requirePlatformAdmin(req: Request) {
+  const user = await userOf(req);
+  if (!user) fail(401, "Please sign in");
+  const { data } = await db.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle();
+  if (!data) fail(403, "Ner Media owner access required");
+  return user;
+}
 // Admins, or a kiosk tablet holding the organization's kiosk key.
 async function requireStaff(req: Request, orgId: string, kioskKey?: unknown) {
   if (kioskKey) {
@@ -61,16 +68,59 @@ async function requireStaff(req: Request, orgId: string, kioskKey?: unknown) {
   await requireAdmin(req, orgId);
 }
 
-// Only send donors back to this organization's own site.
-function safeReturnUrl(value: unknown, req: Request, org: any): string {
+const PLATFORM_DOMAIN = (Deno.env.get("PLATFORM_DOMAIN") || "nermediagroup.com").toLowerCase();
+const PLATFORM_HOME = `https://give.${PLATFORM_DOMAIN}`;
+const orgHome = (org: any) => `https://${org.slug}.${PLATFORM_DOMAIN}`;
+// Addresses that belong to the platform itself (signup page, testing copies).
+function isPlatformHost(host: string) {
+  const extra = (Deno.env.get("PLATFORM_HOSTS") || "").split(",").map((h) => h.trim()).filter(Boolean);
+  return host === `give.${PLATFORM_DOMAIN}` || host.endsWith(".workers.dev") || host === "localhost" || extra.includes(host);
+}
+function hostAllowed(host: string, org: any | null) {
+  if (isPlatformHost(host)) return true;
+  if (!org) return false;
+  return host === `${org.slug}.${PLATFORM_DOMAIN}` || (org.domains || []).includes(host);
+}
+// Only send people back to this organization's own site (or the platform's).
+function safeReturnUrl(value: unknown, _req: Request, org: any | null): string {
   try {
     const u = new URL(String(value));
-    const origin = req.headers.get("origin");
-    const platform = (Deno.env.get("PLATFORM_HOSTS") || "").split(",").map((h) => h.trim()).filter(Boolean);
-    const hostOk = (origin && new URL(origin).host === u.host) || (org.domains || []).includes(u.hostname) || platform.includes(u.hostname);
-    if ((u.protocol === "https:" || u.hostname === "localhost") && hostOk) return u.toString();
+    if ((u.protocol === "https:" || u.hostname === "localhost") && hostAllowed(u.hostname, org)) return u.toString();
   } catch { /* fall through */ }
   return fail(400, "Invalid return URL");
+}
+function slugify(name: string) {
+  return name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/g, "");
+}
+async function slugStatus(slug: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!/^[a-z0-9]([a-z0-9-]{1,38})[a-z0-9]$/.test(slug)) return { ok: false, reason: "Use 3 to 40 letters, numbers or dashes" };
+  const { data: reserved } = await db.rpc("is_reserved_slug", { p_slug: slug });
+  if (reserved) return { ok: false, reason: "That address is reserved" };
+  // An unclaimed signup holds its name for 2 days, then the name is free again.
+  await db.from("organizations").delete().eq("slug", slug).eq("status", "pending").lt("created_at", new Date(Date.now() - 2 * 86400000).toISOString());
+  const { data } = await db.from("organizations").select("id").eq("slug", slug).maybeSingle();
+  return data ? { ok: false, reason: "That address is already taken" } : { ok: true };
+}
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// Sends a one-click sign-in email (branded, through Resend). Falls back to Supabase's own email if Resend isn't set up.
+async function sendLoginLink(email: string, redirectTo: string, intro: { name?: string; heading: string; body: string }) {
+  const allowed = await db.rpc("login_link_allowed", { p_email: email });
+  if (allowed.data === false) fail(429, "Too many sign-in emails were sent to this address. Please try again in an hour.");
+  if (!Deno.env.get("RESEND_API_KEY") || !Deno.env.get("RECEIPT_FROM_EMAIL")) return { fallback: true };
+  // Make sure the account exists, then make a sign-in link for it
+  await db.auth.admin.createUser({ email, email_confirm: false }).catch(() => null);
+  const { data, error } = await db.auth.admin.generateLink({ type: "magiclink", email, options: { redirectTo } });
+  if (error || !data?.properties?.action_link) return { fallback: true };
+  const link = data.properties.action_link;
+  const fakeOrg = { name: intro.name || "Ner Media", address: "", theme: {} };
+  await sendEmail(fakeOrg, email, intro.heading, emailShell(fakeOrg, `
+<p style="margin:0 0 16px;color:#1a2d5a;font-size:20px;font-weight:600;">${escapeHtml(intro.heading)}</p>
+<p style="margin:0 0 24px;color:#5a5a5a;font-size:15px;line-height:1.65;">${escapeHtml(intro.body)}</p>
+<div style="text-align:center;margin:28px 0;"><a href="${link}" style="display:inline-block;background:#c9a227;color:#1a2d5a;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Sign in</a></div>
+<p style="margin:24px 0 0;color:#888;font-size:12px;line-height:1.6;">This link works once and expires in an hour. If you didn't ask for it, you can ignore this email.<br/>Fundraising sites by Ner Media · nermediagroup.com</p>`));
+  return { sent: true };
 }
 
 async function getCampaign(id: unknown) {
@@ -160,8 +210,19 @@ async function createCheckout(org: any, d: any, campaign: any, successUrl: strin
   return { url: session.url };
 }
 
+// Donors Fund keys: the organization's own, or Ner Media's platform key (charges go to the org by its tax ID).
+function donorsFundKeys(s: any) {
+  const own = s.donors_fund_api_key && s.donors_fund_validation_token;
+  return {
+    apiKey: own ? s.donors_fund_api_key : Deno.env.get("DONORS_FUND_API_KEY"),
+    token: own ? s.donors_fund_validation_token : Deno.env.get("DONORS_FUND_VALIDATION_TOKEN"),
+    account: s.donors_fund_account_number || Deno.env.get("DONORS_FUND_ACCOUNT_NUMBER"),
+  };
+}
 async function payDonorsFund(org: any, d: any, campaign: any, donor: string, authorization: string) {
-  const s = await getSecrets(org.id);
+  const s0 = await getSecrets(org.id);
+  const k = donorsFundKeys(s0);
+  const s = { donors_fund_api_key: k.apiKey, donors_fund_validation_token: k.token, donors_fund_account_number: k.account };
   if (!org.donors_fund_enabled || !s.donors_fund_api_key || !s.donors_fund_validation_token || !s.donors_fund_account_number || !org.tax_id) {
     fail(400, "Donors Fund is not set up for this organization");
   }
@@ -223,10 +284,101 @@ async function resolveMember(campaign: any, b: any, name: string, email: string,
 }
 
 const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
+  // ── Self-serve signup ──
+  async check_slug(b) {
+    const slug = slugify(clean(b.slug || b.name, 80));
+    if (!slug) return { slug, available: false, reason: "Type your organization's name" };
+    const st = await slugStatus(slug);
+    return { slug, available: st.ok, reason: st.reason, url: `${slug}.${PLATFORM_DOMAIN}` };
+  },
+
+  // Creates a free site right away (on hold until the owner clicks the link in their email).
+  async create_org(b) {
+    const name = clean(b.name, 80).replace(/\s+/g, " ");
+    const email = clean(b.email, 320).toLowerCase();
+    const slug = slugify(clean(b.slug || name, 80));
+    if (name.length < 3) fail(400, "Please enter your organization's name");
+    if (!EMAIL_RE.test(email)) fail(400, "Please enter a valid email");
+    const { count } = await db.from("organizations").select("id", { count: "exact", head: true }).eq("owner_email", email).eq("status", "pending");
+    if ((count || 0) >= 3) fail(429, "You already have sites waiting for you. Check your email for the sign-in link.");
+    const st = await slugStatus(slug);
+    if (!st.ok) fail(400, st.reason || "That address is not available");
+
+    const { data: org, error } = await db.from("organizations").insert({
+      slug, name, legal_name: name, owner_email: email, status: "pending",
+      receipt_prefix: (name.split(" ").map((w) => w[0]).join("").replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 4) || "RCPT"),
+    }).select().single();
+    if (error) fail(400, error.code === "23505" ? "That address is already taken" : error.message);
+    await db.from("campaigns").insert({
+      org_id: org.id, slug: "general", name: "General Fund", type: "regular", is_default: true,
+      goal_amount: 0, headline: `Please join us in supporting ${name}.`,
+    });
+    await db.from("org_invites").insert({ org_id: org.id, email });
+    const sent = await sendLoginLink(email, `${orgHome(org)}/admin/setup`, {
+      name: "Ner Media",
+      heading: `Your fundraising site for ${name} is ready`,
+      body: `Click below to sign in and finish setting up ${slug}.${PLATFORM_DOMAIN}: add your logo, photos and description, and connect Stripe so donations go straight to your organization.`,
+    });
+    return { slug, url: orgHome(org), redirect: `${orgHome(org)}/admin/setup`, ...sent };
+  },
+
+  // Sign-in link for admins (and the platform owner).
+  async send_login_link(b) {
+    const email = clean(b.email, 320).toLowerCase();
+    if (!EMAIL_RE.test(email)) fail(400, "Please enter a valid email");
+    let org = null;
+    if (b.org_slug) {
+      const { data } = await db.from("organizations").select("*").eq("slug", clean(b.org_slug, 80)).maybeSingle();
+      org = data;
+    }
+    const redirect = safeReturnUrl(b.redirect, new Request("http://x"), org);
+    return await sendLoginLink(email, redirect, {
+      name: org?.name || "Ner Media",
+      heading: `Sign in to ${org?.name || "Ner Media"}`,
+      body: "Click below to sign in to your fundraising site's admin.",
+    });
+  },
+
+  // What is configured on the platform (no secrets, just yes/no).
+  async health() {
+    return {
+      email: !!(Deno.env.get("RESEND_API_KEY") && Deno.env.get("RECEIPT_FROM_EMAIL")),
+      stripe_platform: !!Deno.env.get("STRIPE_PLATFORM_SECRET_KEY"),
+      stripe_webhook: !!Deno.env.get("STRIPE_CONNECT_WEBHOOK_SECRET"),
+      donors_fund_platform: !!(Deno.env.get("DONORS_FUND_API_KEY") && Deno.env.get("DONORS_FUND_VALIDATION_TOKEN")),
+      domain: PLATFORM_DOMAIN,
+    };
+  },
+
+  // ── Ner Media owner page ──
+  async platform_orgs(_b, req) {
+    await requirePlatformAdmin(req);
+    const { data: orgs } = await db.from("organizations").select("id, slug, name, status, plan, raffle_enabled, owner_email, stripe_account_id, stripe_charges_enabled, stripe_own_keys, donors_fund_enabled, domains, created_at").order("created_at", { ascending: false });
+    const { data: totals } = await db.from("donations").select("org_id, amount").eq("status", "completed");
+    const sum: Record<string, number> = {};
+    for (const t of totals || []) sum[t.org_id] = (sum[t.org_id] || 0) + Number(t.amount);
+    return { orgs: (orgs || []).map((o: any) => ({ ...o, raised: sum[o.id] || 0, url: orgHome(o) })), domain: PLATFORM_DOMAIN };
+  },
+  async platform_set(b, req) {
+    await requirePlatformAdmin(req);
+    if (!isUuid(b.org_id)) fail(400, "Missing organization");
+    const patch: any = {};
+    if (typeof b.raffle_enabled === "boolean") patch.raffle_enabled = b.raffle_enabled;
+    if (["free", "pro"].includes(b.plan)) patch.plan = b.plan;
+    if (["active", "suspended"].includes(b.status)) patch.status = b.status;
+    if (Array.isArray(b.domains)) patch.domains = b.domains.map((d: unknown) => clean(d, 120).toLowerCase()).filter(Boolean);
+    const { error } = await db.from("organizations").update(patch).eq("id", b.org_id);
+    if (error) throw error;
+    return { success: true };
+  },
+
   // ── Step 1 for every donation: create it as pending, with the amount decided by the server's rules ──
   async start_donation(b) {
     const campaign = await getCampaign(b.campaign_id);
     if (!campaign.is_active) fail(400, "This campaign is closed");
+    const { data: owner } = await db.from("organizations").select("status, raffle_enabled").eq("id", campaign.org_id).single();
+    if (owner?.status !== "active") fail(400, "This site is not open for donations yet");
+    if (campaign.type === "spin_raffle" && !owner.raffle_enabled) fail(400, "This raffle is not available");
     const name = clean(b.donor_name, 120);
     const email = clean(b.email, 320);
     const phone = clean(b.phone, 40);
@@ -629,16 +781,16 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     return { success: true };
   },
 
-  // ── Raffle drawing: every completed spin is one entry ──
+  // ── Raffle drawing: every sold ticket is one entry ──
   async draw_winner(b, req) {
     const campaign = await getCampaign(b.campaign_id);
     await requireAdmin(req, campaign.org_id);
     if (campaign.type !== "spin_raffle") fail(400, "Not a raffle campaign");
-    const { data: entries } = await db.from("donations").select("id, donor_name, display_name, is_anonymous, phone, email")
+    const { data: entries } = await db.from("donations").select("id, donor_name, display_name, is_anonymous, phone, email, ticket_number")
       .eq("campaign_id", campaign.id).eq("status", "completed").not("ticket_number", "is", null);
     if (!entries?.length) fail(400, "No entries yet");
     const w = entries[Math.floor(randomUnit() * entries.length)];
-    const winner = { donation_id: w.id, display_name: w.is_anonymous ? "Anonymous" : w.display_name || w.donor_name, drawn_at: new Date().toISOString(), entries: entries.length };
+    const winner = { donation_id: w.id, ticket_number: w.ticket_number, display_name: w.is_anonymous ? "Anonymous" : w.display_name || w.donor_name, drawn_at: new Date().toISOString(), entries: entries.length };
     await db.from("campaigns").update({ raffle_winner: winner }).eq("id", campaign.id);
     return { winner, contact: { name: w.donor_name, phone: w.phone, email: w.email } };
   },
@@ -663,7 +815,8 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
       connect: { account_id: org.stripe_account_id, charges_enabled: org.stripe_charges_enabled },
       own_keys: { secret: !!s.stripe_secret_key, webhook: !!s.stripe_webhook_secret, active: org.stripe_own_keys },
       reader_id: s.stripe_reader_id || "",
-      donors_fund: { api_key: !!s.donors_fund_api_key, token: !!s.donors_fund_validation_token, account: s.donors_fund_account_number || "" },
+      donors_fund: { api_key: !!s.donors_fund_api_key, token: !!s.donors_fund_validation_token, account: s.donors_fund_account_number || "", platform_key: !!(Deno.env.get("DONORS_FUND_API_KEY") && Deno.env.get("DONORS_FUND_VALIDATION_TOKEN")) },
+      raffle_enabled: org.raffle_enabled, plan: org.plan,
       connext: { api_key: !!s.connext_api_key, group: s.connext_group || 1 },
       webhook_url: `${Deno.env.get("SUPABASE_URL")}/functions/v1/api/stripe-webhook?org=${org.slug}`,
     };
@@ -703,7 +856,7 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     const s = await getSecrets(b.org_id);
     const patch: any = {
       card_reader_enabled: !!s.stripe_reader_id,
-      donors_fund_enabled: !!(s.donors_fund_api_key && s.donors_fund_validation_token && s.donors_fund_account_number),
+      donors_fund_enabled: (() => { const k = donorsFundKeys(s); return !!(k.apiKey && k.token && k.account && (v.donors_fund_on !== false)); })(),
     };
     if (p.stripe_secret_key) patch.stripe_own_keys = true;
     if ("stripe_publishable_key" in v) patch.stripe_publishable_key = clean(v.stripe_publishable_key, 200) || null;

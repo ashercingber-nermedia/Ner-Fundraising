@@ -12,24 +12,39 @@ function hexToRgb(hex, fallback) {
   return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
 }
 
-// Which organization is this site for? 1) ?org=slug  2) the web address  3) the default in .env
+export const PLATFORM_DOMAIN = (import.meta.env.VITE_PLATFORM_DOMAIN || "nermediagroup.com").toLowerCase();
+export const PLATFORM_HOME = `https://give.${PLATFORM_DOMAIN}`;
+export const NER_MEDIA_SITE = import.meta.env.VITE_NER_MEDIA_SITE || `https://${PLATFORM_DOMAIN}`;
+export const orgUrl = (org) => `https://${org.slug}.${PLATFORM_DOMAIN}`;
+
+// The platform's own addresses (signup page, owner page, testing copies)
+export function isPlatformHost(host = window.location.hostname) {
+  host = host.toLowerCase();
+  return host === `give.${PLATFORM_DOMAIN}` || host.endsWith(".workers.dev") || host === "localhost" || host === "127.0.0.1";
+}
+
+const bySlug = async (slug) => {
+  const { data } = await supabase.from("organizations").select("*").eq("slug", String(slug).toLowerCase()).maybeSingle();
+  return data;
+};
+
+// Which organization is this site for?
+//   kahal-ner-shlomo.nermediagroup.com -> that organization
+//   an organization's own domain (e.g. kolleltiferesmoshe.org) -> that organization
+//   the platform address (give.nermediagroup.com) -> the signup page, or ?org=slug to look at one organization
 async function resolveOrg() {
-  const params = new URLSearchParams(window.location.search);
-  const fromUrl = params.get("org");
-  if (fromUrl) sessionStorage.setItem("org_slug", fromUrl);
-  const slug = fromUrl || sessionStorage.getItem("org_slug");
-  if (slug) {
-    const { data } = await supabase.from("organizations").select("*").eq("slug", slug).maybeSingle();
-    if (data) return data;
+  const host = window.location.hostname.toLowerCase();
+  const fromUrl = new URLSearchParams(window.location.search).get("org");
+  if (isPlatformHost(host)) {
+    if (fromUrl) sessionStorage.setItem("org_slug", fromUrl);
+    const slug = fromUrl || sessionStorage.getItem("org_slug");
+    return slug ? await bySlug(slug) : null;
   }
-  const { data: byHost } = await supabase.from("organizations").select("*").contains("domains", [window.location.hostname]).limit(1);
-  if (byHost?.length) return byHost[0];
-  const fallback = import.meta.env.VITE_DEFAULT_ORG;
-  if (fallback) {
-    const { data } = await supabase.from("organizations").select("*").eq("slug", fallback).maybeSingle();
-    if (data) return data;
+  if (host.endsWith(`.${PLATFORM_DOMAIN}`)) {
+    return await bySlug(host.slice(0, -(PLATFORM_DOMAIN.length + 1)));
   }
-  return null;
+  const { data: byHost } = await supabase.from("organizations").select("*").contains("domains", [host]).limit(1);
+  return byHost?.[0] || null;
 }
 
 export function OrgProvider({ children }) {
@@ -37,6 +52,7 @@ export function OrgProvider({ children }) {
   const [session, setSession] = useState(undefined);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
 
   const reloadOrg = () => resolveOrg().then(setOrg).catch(() => setOrg(null));
   useEffect(() => { reloadOrg(); }, []);
@@ -59,22 +75,24 @@ export function OrgProvider({ children }) {
 
   useEffect(() => {
     if (session === undefined || org === undefined) return;
-    if (!session || !org) { setIsAdmin(false); setAuthChecked(true); return; }
+    if (!session) { setIsAdmin(false); setIsPlatformAdmin(false); setAuthChecked(true); return; }
     let cancelled = false;
     (async () => {
-      await supabase.rpc("claim_invites"); // pick up any admin invite sent to this email
+      await supabase.rpc("claim_invites"); // pick up any admin invite sent to this email (also switches a new site on)
       const uid = session.user.id;
       const [{ data: m }, { data: p }] = await Promise.all([
-        supabase.from("org_members").select("user_id").eq("org_id", org.id).eq("user_id", uid).maybeSingle(),
+        org ? supabase.from("org_members").select("user_id").eq("org_id", org.id).eq("user_id", uid).maybeSingle() : { data: null },
         supabase.from("platform_admins").select("user_id").eq("user_id", uid).maybeSingle(),
       ]);
-      if (!cancelled) { setIsAdmin(!!(m || p)); setAuthChecked(true); }
+      if (cancelled) return;
+      if (org?.status === "pending" && m) { const fresh = await resolveOrg(); if (!cancelled && fresh) setOrg(fresh); }
+      setIsAdmin(!!org && !!(m || p)); setIsPlatformAdmin(!!p); setAuthChecked(true);
     })();
     return () => { cancelled = true; };
   }, [session, org]);
 
   return (
-    <OrgContext.Provider value={{ org, reloadOrg, session, isAdmin, authChecked, signOut: () => supabase.auth.signOut() }}>
+    <OrgContext.Provider value={{ org, reloadOrg, session, isAdmin, isPlatformAdmin, authChecked, signOut: () => supabase.auth.signOut() }}>
       {children}
     </OrgContext.Provider>
   );

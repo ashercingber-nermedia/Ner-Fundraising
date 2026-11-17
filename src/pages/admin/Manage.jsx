@@ -98,7 +98,7 @@ export function Campaigns() {
           <Field label="Web address: /c/..."><Input value={c.slug} placeholder={slugify(c.name)} onChange={(e) => set("slug", e.target.value)} /></Field>
           <Field label="Type">
             <select className={selectCls + " w-full"} value={c.type} disabled={!!c.id} onChange={(e) => set("type", e.target.value)}>
-              <option value="regular">Regular campaign</option><option value="spin_raffle">Spin raffle</option><option value="membership">Membership</option>
+              <option value="regular">Regular campaign</option><option value="spin_raffle" disabled={!org.raffle_enabled && c.type !== "spin_raffle"}>Spin raffle{org.raffle_enabled ? "" : " (upgrade, ask Ner Media)"}</option><option value="membership">Membership</option>
             </select>
           </Field>
           <Field label="Goal ($, 0 = no goal)"><Input type="number" min="0" value={c.goal_amount} onChange={(e) => set("goal_amount", e.target.value)} /></Field>

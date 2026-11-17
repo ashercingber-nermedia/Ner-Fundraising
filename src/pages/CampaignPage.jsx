@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import { Heart, Trophy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import NerBadge from "@/components/NerBadge";
 import { Button } from "@/components/ui/button";
 import AutoScrollList from "@/components/AutoScrollList";
 import { useOrg, useCampaigns, useFeed, Spinner } from "@/lib/org";
@@ -171,6 +172,7 @@ export default function CampaignPage() {
             <div className="bg-white p-2 rounded-lg">
               <QRCodeSVG value={window.location.origin + donateUrl} size={80} bgColor="#ffffff" fgColor="#1a2d5a" />
             </div>
+            <NerBadge className="mt-3" />
           </div>
           <div className="text-center">
             <p className="text-brand font-semibold tracking-wide">{org.name}</p>
