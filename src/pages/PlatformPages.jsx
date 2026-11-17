@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
-import { NerLogo } from "@/components/NerBadge";
+import { NerLogoFull } from "@/components/NerBadge";
 import { NER_MEDIA_SITE, PLATFORM_DOMAIN, Spinner, useOrg } from "@/lib/org";
 import { api, money, supabase } from "@/lib/supabase";
 
@@ -56,7 +56,7 @@ export function StartPage() {
     <div className="min-h-screen" style={{ background: "#ede8e1" }}>
       <header className="max-w-5xl mx-auto px-5 py-5 flex items-center justify-between">
         <a href={NER_MEDIA_SITE} className="flex items-center gap-2 no-underline" style={{ color: NAVY }}>
-          <NerLogo size={30} /><span className="text-lg font-semibold">Ner Media</span>
+          <NerLogoFull height={44} />
         </a>
         <Link to="/login" className="text-sm" style={{ color: NAVY }}>Sign in</Link>
       </header>
@@ -166,7 +166,7 @@ export function PlatformPage() {
     <div className="min-h-screen bg-[#ede8e1]">
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2" style={{ color: NAVY }}><NerLogo size={24} /><span className="font-semibold">Ner Media — Fundraising sites</span></div>
+          <div className="flex items-center gap-2" style={{ color: NAVY }}><NerLogoFull height={30} /><span className="font-semibold ml-2">Fundraising sites</span></div>
           <div className="flex gap-3 items-center">
             <Link to="/" className="text-sm" style={{ color: NAVY }}>Signup page</Link>
             <button onClick={signOut} className="text-sm text-gray-500">Sign out</button>

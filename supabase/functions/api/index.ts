@@ -114,7 +114,10 @@ async function sendLoginLink(email: string, redirectTo: string, intro: { name?: 
   const { data, error } = await db.auth.admin.generateLink({ type: "magiclink", email, options: { redirectTo } });
   if (error || !data?.properties?.action_link) return { fallback: true };
   const link = data.properties.action_link;
-  const fakeOrg = { name: intro.name || "Ner Media", address: "", theme: {} };
+  // Platform emails (signup, owner sign-in) carry the Ner Media logo; an organization's admin sign-in uses its own name.
+  const fakeOrg = intro.name && intro.name !== "Ner Media"
+    ? { name: intro.name, address: "", theme: {} }
+    : { name: "Ner Media", address: "nermediagroup.com", theme: { brand: "#0E1B2C", accent: "#F2A93B" }, headerImage: `${PLATFORM_HOME}/brand/ner-media-email-header.png` };
   await sendEmail(fakeOrg, email, intro.heading, emailShell(fakeOrg, `
 <p style="margin:0 0 16px;color:#1a2d5a;font-size:20px;font-weight:600;">${escapeHtml(intro.heading)}</p>
 <p style="margin:0 0 24px;color:#5a5a5a;font-size:15px;line-height:1.65;">${escapeHtml(intro.body)}</p>

@@ -149,9 +149,11 @@ export function emailShell(org: any, inner: string): string {
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#ede8e1;font-family:'Helvetica Neue',Arial,sans-serif;">
 <table width="100%" cellspacing="0" cellpadding="0" style="background:#ede8e1;padding:30px 0;"><tr><td align="center">
 <table width="600" cellspacing="0" cellpadding="0" style="background:#fff;border-radius:12px;overflow:hidden;max-width:600px;">
-<tr><td style="background:${brand};padding:36px 40px;text-align:center;">
+${org.headerImage
+  ? `<tr><td style="background:#0E1B2C;padding:0;text-align:center;"><img src="${org.headerImage}" width="600" alt="${escapeHtml(org.name)}" style="display:block;width:100%;max-width:600px;height:auto;border:0;"/></td></tr>`
+  : `<tr><td style="background:${brand};padding:36px 40px;text-align:center;">
 <h1 style="margin:0;color:#fff;font-size:24px;font-weight:600;">${escapeHtml(org.name)}</h1>
-<div style="height:3px;background:${gold};margin:14px auto 0;width:80px;"></div></td></tr>
+<div style="height:3px;background:${gold};margin:14px auto 0;width:80px;"></div></td></tr>`}
 <tr><td style="padding:40px;">${inner}</td></tr>
 <tr><td style="background:${brand};padding:20px 40px;text-align:center;">
 <p style="margin:0;color:${gold};font-size:12px;">${escapeHtml(org.name)}${org.address ? " • " + escapeHtml(org.address) : ""}</p></td></tr>

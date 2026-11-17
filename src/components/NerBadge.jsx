@@ -1,16 +1,24 @@
 import { NER_MEDIA_SITE } from "@/lib/org";
 
-// Ner Media mark: a TV screen with a flame, "Ner" inside the screen.
-export function NerLogo({ size = 28, dark = false }) {
-  const ink = dark ? "#ffffff" : "#1a2d5a";
+// Ner Media mark (logo option D): a screen outline with an orange flame and "Ner" inside, on a small stand.
+const FLAME = "#F2A93B";
+export function NerLogo({ size = 16, dark = false }) {
+  const ink = dark ? "#FFFFFF" : "#0E1B2C";
+  const s = size / 16;
   return (
-    <svg width={size * 1.25} height={size} viewBox="0 0 50 40" aria-hidden="true">
-      <rect x="2" y="2" width="46" height="29" rx="5" fill="none" stroke={ink} strokeWidth="3" />
-      <path d="M18 36h14" stroke={ink} strokeWidth="3" strokeLinecap="round" />
-      <path d="M13 23c-3-3-2-7 1-10 0 3 2 3 2 3 0-3 1-6 4-8-1 4 3 6 3 10 0 3-2 5-5 5s-4-1-5 0z" fill="#e8a317" />
-      <text x="34" y="22" textAnchor="middle" fontFamily="Georgia, serif" fontWeight="700" fontSize="12" fill={ink}>Ner</text>
-    </svg>
+    <span aria-hidden="true" style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2 * s }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 * s, border: `${1.5 * s}px solid ${ink}`, borderRadius: 4 * s, padding: `${2 * s}px ${6 * s}px` }}>
+        <svg width={7 * s} height={9 * s} viewBox="0 0 24 32"><path d="M12 1C12 1 3 11 3 20a9 9 0 0 0 18 0C21 11 12 1 12 1Z" fill={FLAME} /></svg>
+        <span style={{ fontFamily: "Rubik, system-ui, sans-serif", fontWeight: 700, fontSize: 11 * s, lineHeight: 1, color: ink }}>Ner</span>
+      </span>
+      <span style={{ width: 14 * s, height: 2 * s, borderRadius: 2, background: ink }} />
+    </span>
   );
+}
+
+// Full logo (screen + "Ner Media" + tagline), as drawn in the Ner Media Logo design.
+export function NerLogoFull({ height = 40 }) {
+  return <img src="/brand/ner-media-logo.png" alt="Ner Media" style={{ height, width: "auto" }} />;
 }
 
 // "Set up by Ner Media" link shown on every organization's public pages.
@@ -25,7 +33,7 @@ export default function NerBadge({ fixed = false, dark = false, className = "" }
         dark ? "bg-white/10 text-white border border-white/20" : "bg-white/90 text-[#1a2d5a] border border-[#1a2d5a]/15"
       } ${className}`}
     >
-      <NerLogo size={16} dark={dark} />
+      <NerLogo size={15} dark={dark} />
       <span>Set up by <strong>Ner Media</strong></span>
     </a>
   );
