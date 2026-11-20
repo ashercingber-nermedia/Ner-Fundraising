@@ -110,9 +110,19 @@ export default function Setup() {
           <input type="file" accept="image/*" className="text-sm" onChange={(e) => e.target.files[0] && upload(e.target.files[0], (url) => setO((x) => ({ ...x, logo_url: url })))} />
         </div>
         <div className="flex gap-5 mt-4 flex-wrap">
-          {[["brand", "Main color", "#1a2d5a"], ["accent", "Accent", "#c9a227"], ["canvas", "Background", "#ede8e1"]].map(([k, l, d]) => (
+          {[["brand", "Main color", "#0F172A"], ["accent", "Accent", "#C5A059"], ["canvas", "Background", "#F8F5F0"]].map(([k, l, d]) => (
             <label key={k} className="text-sm flex items-center gap-2 text-brand"><input type="color" value={o.theme[k] || d} onChange={(e) => setO({ ...o, theme: { ...o.theme, [k]: e.target.value } })} />{l}</label>
           ))}
+        </div>
+        <div className="flex items-center gap-4 flex-wrap mt-4">
+          <div className="w-28 h-20 rounded-lg overflow-hidden bg-brand/10">
+            <img src={o.theme.hero_image || "/stock/sanctuary.jpg"} alt="" className="w-full h-full object-cover" />
+          </div>
+          <div className="text-sm text-brand">
+            <p className="font-medium">Cover photo for your home page</p>
+            <input type="file" accept="image/*" className="text-sm mt-1" onChange={(e) => e.target.files[0] && upload(e.target.files[0], (url) => setO((x) => ({ ...x, theme: { ...x.theme, hero_image: url } })))} />
+            {o.theme.hero_image && <button type="button" className="text-xs underline text-brand/60 ml-2" onClick={() => setO((x) => ({ ...x, theme: { ...x.theme, hero_image: "" } }))}>Use the default photo</button>}
+          </div>
         </div>
         <Button className="mt-4 bg-brand hover:bg-brand/90" disabled={busy === "look"} onClick={() => saveOrg(["logo_url", "theme"], "look")}>Save</Button>
       </Step>

@@ -149,11 +149,10 @@ async function unsoldTickets(campaign: any): Promise<number[]> {
 }
 const MIN_MONTHLY = 25, MAX_MONTHS = 12;
 // How a ticket is paid off: equal monthly payments, never under $25, never more than 12 months.
-// `monthly` is what the donor chose before spinning (empty = pay in full).
-function paymentPlan(amount: number, monthly: number | null) {
+const maxMonths = (amount: number) => Math.max(1, Math.min(MAX_MONTHS, Math.floor(amount / MIN_MONTHLY)));
+function paymentPlan(amount: number, months: number) {
   const cents = Math.round(amount * 100);
-  let months = 1;
-  if (monthly && monthly >= MIN_MONTHLY) months = Math.min(Math.ceil(amount / monthly), Math.floor(amount / MIN_MONTHLY), MAX_MONTHS);
+  months = Math.max(1, Math.min(Math.floor(months) || 1, maxMonths(amount)));
   if (months < 2) return { months: 1, firstCents: cents, perCents: cents };
   const perCents = Math.floor(cents / months);
   return { months, perCents, firstCents: cents - perCents * (months - 1) }; // any leftover pennies go on the first payment
@@ -200,13 +199,12 @@ async function createCheckout(org: any, d: any, campaign: any, successUrl: strin
       quantity: 1,
     }];
     // Spin raffle: hold the highest ticket now, capture only the ticket the spin lands on.
-    // If the donor asked to pay monthly, the card is also saved for the later payments.
+    // The card is also saved, because the donor may choose monthly payments after seeing the ticket.
     params.payment_intent_data = {
       metadata,
-      ...(d.awaiting_spin ? { capture_method: "manual" } : {}),
-      ...(d.awaiting_spin && d.spin_monthly ? { setup_future_usage: "off_session" } : {}),
+      ...(d.awaiting_spin ? { capture_method: "manual", setup_future_usage: "off_session" } : {}),
     };
-    if (d.awaiting_spin && d.spin_monthly) params.customer_creation = "always";
+    if (d.awaiting_spin) params.customer_creation = "always";
   }
   const session = await stripe.checkout.sessions.create(params, opts);
   await db.from("donations").update({ stripe_checkout_session_id: session.id }).eq("id", d.id);
@@ -284,6 +282,99 @@ async function resolveMember(campaign: any, b: any, name: string, email: string,
     m.name.trim().toLowerCase() === name.toLowerCase());
   // Not on the roster: they are added (flagged) only once their payment actually goes through — see completeDonation.
   return found ? found.id : null;
+}
+
+// ───────────── Spin raffle helpers ─────────────
+async function spinIntent(d0: any) {
+  const org = await getOrg(d0.org_id);
+  const { stripe, opts } = await stripeFor(org);
+  let piId = d0.stripe_payment_intent_id;
+  if (!piId && d0.stripe_checkout_session_id) {
+    const session = await stripe.checkout.sessions.retrieve(d0.stripe_checkout_session_id, undefined, opts);
+    piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+  }
+  if (!piId) fail(400, "Please authorize your card first");
+  const pi: any = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] }, opts);
+  if (pi.metadata?.donation_id !== d0.id) fail(400, "Payment does not match this donation");
+  return { org, stripe, opts, pi };
+}
+// A card can be charged again later only if Stripe saved it (phone wallets on the reader can't be).
+function canSplit(pi: any) {
+  const customer = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+  const onReader = !!pi.payment_method_types?.includes("card_present");
+  const wallet = !!pi.latest_charge?.payment_method_details?.card_present?.wallet?.type;
+  return !!customer && !(onReader && wallet);
+}
+function spinAnswer(d: any, campaign: any, done: boolean, splittable = false) {
+  const amount = Number(d.ticket_number || d.amount);
+  const months = d.kind === "pledge" ? Number(d.recurring_count) || 1 : 1;
+  const plan = paymentPlan(amount, months);
+  const top = splittable ? maxMonths(amount) : 1;
+  return {
+    number: d.ticket_number, amount, tickets: campaign.ticket_count, done, needs_plan: !done,
+    months: plan.months, first: plan.firstCents / 100, monthly: plan.perCents / 100,
+    options: done ? [] : Array.from({ length: top }, (_, i) => { const p = paymentPlan(amount, i + 1); return { months: p.months, first: p.firstCents / 100, monthly: p.perCents / 100 }; }),
+  };
+}
+// Charge the ticket: the whole amount, or the first monthly payment plus a subscription for the rest.
+async function chargeSpin(d0: any, months: number) {
+  const campaign = await getCampaign(d0.campaign_id);
+  const { org, stripe, opts, pi } = await spinIntent(d0);
+  const number = Number(d0.ticket_number);
+  if (pi.status === "succeeded") {
+    await completeDonation(d0.id, { stripe_payment_intent_id: pi.id });
+    const { data: fresh } = await db.from("donations").select("*").eq("id", d0.id).single();
+    return spinAnswer(fresh || d0, campaign, true);
+  }
+  if (pi.status !== "requires_capture") fail(400, "This card authorization has expired. Please start again.");
+  const plan = paymentPlan(number, canSplit(pi) ? months : 1);
+  const split = plan.months > 1;
+  // Claim the choice first so two presses (or the scheduler) can't charge twice.
+  const { data: claimed } = await db.from("donations").update({
+    amount: number, kind: split ? "pledge" : "one_time", is_recurring: split,
+    recurring_interval: split ? "month" : null, recurring_count: split ? plan.months : null, plan_chosen_at: new Date().toISOString(),
+  }).eq("id", d0.id).eq("status", "pending").is("plan_chosen_at", null).select("id");
+  if (!claimed?.length) {
+    const { data: fresh } = await db.from("donations").select("*").eq("id", d0.id).single();
+    return spinAnswer(fresh, campaign, fresh?.status === "completed");
+  }
+  try {
+    await stripe.paymentIntents.capture(pi.id, { amount_to_capture: plan.firstCents }, { ...opts, idempotencyKey: `spin-capture-${d0.id}` });
+  } catch (e) {
+    await db.from("donations").update({ plan_chosen_at: null, kind: "one_time", is_recurring: false, recurring_interval: null, recurring_count: null }).eq("id", d0.id);
+    throw e;
+  }
+  let extra: Record<string, unknown> = {};
+  if (split) {
+    try {
+      const customer = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+      let savedCard = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+      if (pi.payment_method_types?.includes("card_present")) {
+        const after: any = await stripe.paymentIntents.retrieve(pi.id, { expand: ["latest_charge"] }, opts);
+        savedCard = after.latest_charge?.payment_method_details?.card_present?.generated_card;
+      }
+      if (!savedCard) throw new Error("this card could not be saved");
+      const next = addMonths(new Date(), 1);
+      const d = { ...d0, amount: number, kind: "pledge", is_recurring: true, recurring_interval: "month", recurring_count: plan.months };
+      const product = await stripe.products.create({ name: `Raffle ticket #${number} — ${org.name}` }, { ...opts, idempotencyKey: `spin-product-${d0.id}` });
+      const sub = await stripe.subscriptions.create({
+        customer, default_payment_method: savedCard,
+        items: [{ price_data: { currency: "usd", product: product.id, unit_amount: plan.perCents, recurring: { interval: "month" } } }],
+        billing_cycle_anchor: Math.floor(next.getTime() / 1000), proration_behavior: "none",
+        cancel_at: pledgeCancelAt(next, plan.months - 1, "month"),
+        metadata: stripeMetadata(d, campaign.name),
+      }, { ...opts, idempotencyKey: `spin-sub-${d0.id}` });
+      extra = { stripe_subscription_id: sub.id };
+    } catch (e) {
+      extra = { notes: `First payment taken, but the monthly plan could not be started (${(e as Error).message}). Arrange the remaining payments with the donor.` };
+    }
+  }
+  const cardholder = await getCardholderName(stripe, pi, opts);
+  const fields = { ...extra, ...(cardholder ? { cardholder_name: cardholder } : {}) };
+  // Saved separately too: Stripe's webhook may already have marked the donation completed.
+  if (Object.keys(fields).length) await db.from("donations").update(fields).eq("id", d0.id);
+  await completeDonation(d0.id, { stripe_payment_intent_id: pi.id, ...fields });
+  return spinAnswer({ ...d0, amount: number, kind: split ? "pledge" : "one_time", recurring_count: plan.months }, campaign, true);
 }
 
 const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
@@ -422,14 +513,8 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
       const left = await unsoldTickets(campaign);
       if (!left.length) fail(400, "Every ticket has been sold. Thank you!");
       const top = left[left.length - 1];
-      let monthly: number | null = null;
-      if (b.monthly != null && b.monthly !== "") {
-        monthly = Math.round(Number(b.monthly) * 100) / 100;
-        const least = Math.max(MIN_MONTHLY, Math.ceil(top / MAX_MONTHS));
-        if (!(monthly >= least)) fail(400, `Monthly payments must be at least $${least} so any ticket is paid off within ${MAX_MONTHS} months`);
-      }
       // Stored (and authorized) as the highest unsold ticket until the spin replaces it with the real one.
-      Object.assign(row, { kind: "one_time", amount: top, awaiting_spin: true, spin_monthly: monthly });
+      Object.assign(row, { kind: "one_time", amount: top, awaiting_spin: true, spin_monthly: null });
     } else {
       const amount = Math.round(Number(b.amount) * 100) / 100;
       if (!(amount >= 1) || amount > 1_000_000) fail(400, "Please enter a donation amount");
@@ -465,37 +550,19 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     return await createCheckout(org, d, campaign, safeReturnUrl(b.success_url, req, org), safeReturnUrl(b.cancel_url, req, org));
   },
 
-  // ── Spin raffle: once the card is authorized, the server hands out a random unsold ticket and charges for it ──
+  // ── Spin raffle: once the card is authorized, the server hands out a random unsold ticket.
+  // The donor then picks pay in full or monthly (choose_plan). Nothing is charged until then;
+  // a spin left without a choice is charged in full by finalize_spins.
   async spin(b) {
     const d0 = await pendingDonation(b.donation_id);
     if (!d0.awaiting_spin) fail(400, "This donation is not a raffle spin");
     const campaign = await getCampaign(d0.campaign_id);
-    const answer = (d: any, plan: any) => ({
-      number: d.ticket_number, amount: Number(d.amount), months: plan.months,
-      first: plan.firstCents / 100, monthly: plan.perCents / 100, tickets: campaign.ticket_count,
-    });
-    const planOf = (d: any) => {
-      const cents = Math.round(Number(d.amount) * 100), months = d.kind === "pledge" ? Number(d.recurring_count) || 1 : 1;
-      const perCents = Math.floor(cents / months);
-      return { months, perCents, firstCents: cents - perCents * (months - 1) };
-    };
-    if (d0.status === "completed") return answer(d0, planOf(d0));
+    if (d0.status === "completed") return spinAnswer(d0, campaign, true);
     if (d0.status !== "pending") fail(400, "This donation was cancelled");
-
-    const org = await getOrg(d0.org_id);
-    const { stripe, opts } = await stripeFor(org);
-    let piId = d0.stripe_payment_intent_id;
-    if (!piId && d0.stripe_checkout_session_id) {
-      const session = await stripe.checkout.sessions.retrieve(d0.stripe_checkout_session_id, undefined, opts);
-      piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
-    }
-    if (!piId) fail(400, "Please authorize your card first");
-    const pi: any = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] }, opts);
-    if (pi.metadata?.donation_id !== d0.id) fail(400, "Payment does not match this donation");
-    if (pi.status === "succeeded" && d0.ticket_number) {
-      // The charge already went through on an earlier press; just finish up.
-      await completeDonation(d0.id, { stripe_payment_intent_id: piId });
-      return answer(d0, planOf(d0));
+    const { pi } = await spinIntent(d0);
+    if (d0.ticket_number) {
+      if (pi.status === "succeeded") { await completeDonation(d0.id, { stripe_payment_intent_id: pi.id }); return spinAnswer(d0, campaign, true); }
+      return spinAnswer(d0, campaign, false, canSplit(pi)); // pressed again or page reloaded: same ticket
     }
     if (pi.status !== "requires_capture") fail(400, "Please authorize your card first");
 
@@ -503,52 +570,44 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     const { data: number, error } = await db.rpc("claim_ticket", { p_donation: d0.id, p_max: Math.floor(pi.amount_capturable / 100) });
     if (error) throw error;
     if (!number) fail(400, "Every ticket has been sold. Your card was not charged.");
+    await db.from("donations").update({ stripe_payment_intent_id: pi.id, spun_at: new Date().toISOString() }).eq("id", d0.id);
+    const d = { ...d0, ticket_number: number, amount: number, stripe_payment_intent_id: pi.id };
+    // Only one way to pay (ticket under $50, or a phone wallet that can't be saved): charge it now.
+    if (!canSplit(pi) || maxMonths(number) < 2) return await chargeSpin(d, 1);
+    return spinAnswer(d, campaign, false, true);
+  },
 
-    // A card can be charged again later only if Stripe saved it (phone wallets on the reader can't be).
-    const customer = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
-    const onReader = !!pi.payment_method_types?.includes("card_present");
-    const wallet = !!pi.latest_charge?.payment_method_details?.card_present?.wallet?.type;
-    const plan = paymentPlan(number, customer && !(onReader && wallet) ? Number(d0.spin_monthly) || null : null);
-    const split = plan.months > 1;
-    try {
-      await db.from("donations").update({
-        stripe_payment_intent_id: piId,
-        ...(split ? { kind: "pledge", is_recurring: true, recurring_interval: "month", recurring_count: plan.months } : {}),
-      }).eq("id", d0.id);
-      await stripe.paymentIntents.capture(piId, { amount_to_capture: plan.firstCents }, { ...opts, idempotencyKey: `spin-capture-${d0.id}` });
-    } catch (e) {
-      // Charge failed: put the ticket back so someone else can get it.
-      await db.from("donations").update({ ticket_number: null, kind: "one_time", is_recurring: false, recurring_interval: null, recurring_count: null })
-        .eq("id", d0.id).eq("status", "pending");
-      throw e;
+  // Page reloaded or back from Stripe: has this card already been spun? (Never hands out a ticket.)
+  async spin_status(b) {
+    const d0 = await pendingDonation(b.donation_id);
+    if (!d0.awaiting_spin) fail(400, "This donation is not a raffle spin");
+    const campaign = await getCampaign(d0.campaign_id);
+    if (d0.status === "completed") return spinAnswer(d0, campaign, true);
+    if (d0.status !== "pending") fail(400, "This donation was cancelled");
+    if (!d0.ticket_number) return { number: null, done: false };
+    const { pi } = await spinIntent(d0);
+    return spinAnswer(d0, campaign, false, canSplit(pi));
+  },
+
+  async choose_plan(b) {
+    const d = await pendingDonation(b.donation_id);
+    if (!d.awaiting_spin || !d.ticket_number) fail(400, "Please spin first");
+    const campaign = await getCampaign(d.campaign_id);
+    if (d.status === "completed") return spinAnswer(d, campaign, true);
+    if (d.status !== "pending") fail(400, "This donation was cancelled");
+    return await chargeSpin(d, Math.floor(Number(b.months)) || 1);
+  },
+
+  // Called every few minutes by the database scheduler: spins left without a choice are charged in full.
+  async finalize_spins() {
+    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data } = await db.from("donations").select("*").eq("awaiting_spin", true).eq("status", "pending")
+      .not("ticket_number", "is", null).lt("spun_at", cutoff).limit(20);
+    let done = 0;
+    for (const d of data || []) {
+      try { await chargeSpin(d, 1); done++; } catch (e) { console.error("[finalize_spins]", d.id, (e as Error).message); }
     }
-    let extra: Record<string, unknown> = {};
-    if (split) {
-      try {
-        let savedCard = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
-        if (onReader) {
-          const after: any = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] }, opts);
-          savedCard = after.latest_charge?.payment_method_details?.card_present?.generated_card;
-        }
-        if (!savedCard) throw new Error("this card could not be saved");
-        const next = addMonths(new Date(), 1);
-        const d = { ...d0, amount: number, kind: "pledge", is_recurring: true, recurring_interval: "month", recurring_count: plan.months };
-        const product = await stripe.products.create({ name: `Raffle ticket #${number} — ${org.name}` }, { ...opts, idempotencyKey: `spin-product-${d0.id}` });
-        const sub = await stripe.subscriptions.create({
-          customer, default_payment_method: savedCard,
-          items: [{ price_data: { currency: "usd", product: product.id, unit_amount: plan.perCents, recurring: { interval: "month" } } }],
-          billing_cycle_anchor: Math.floor(next.getTime() / 1000), proration_behavior: "none",
-          cancel_at: pledgeCancelAt(next, plan.months - 1, "month"),
-          metadata: stripeMetadata(d, campaign.name),
-        }, { ...opts, idempotencyKey: `spin-sub-${d0.id}` });
-        extra = { stripe_subscription_id: sub.id };
-      } catch (e) {
-        extra = { notes: `First payment taken, but the monthly plan could not be started (${(e as Error).message}). Arrange the remaining payments with the donor.` };
-      }
-    }
-    const cardholder = await getCardholderName(stripe, pi, opts);
-    await completeDonation(d0.id, { ...extra, ...(cardholder ? { cardholder_name: cardholder } : {}) });
-    return answer({ ...d0, ticket_number: number, amount: number }, plan);
+    return { done };
   },
 
   // ── Card reader (admin screen or kiosk tablet) ──
@@ -582,7 +641,7 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     }, opts);
     const pi = await stripe.paymentIntents.create({
       customer: customer.id,
-      ...(d.is_recurring || d.spin_monthly ? { setup_future_usage: "off_session" } : {}),
+      ...(d.is_recurring || d.awaiting_spin ? { setup_future_usage: "off_session" } : {}),
       amount: perChargeCents(d),
       currency: "usd",
       payment_method_types: ["card_present"],
@@ -593,7 +652,7 @@ const actions: Record<string, (b: any, req: Request) => Promise<unknown>> = {
     await db.from("donations").update({ stripe_payment_intent_id: pi.id }).eq("id", d.id);
     const action = await stripe.terminal.readers.processPaymentIntent(
       s.stripe_reader_id,
-      d.is_recurring || d.spin_monthly ? { payment_intent: pi.id, process_config: { allow_redisplay: "always" } } : { payment_intent: pi.id },
+      d.is_recurring || d.awaiting_spin ? { payment_intent: pi.id, process_config: { allow_redisplay: "always" } } : { payment_intent: pi.id },
       opts,
     );
     return { success: true, paymentIntentId: pi.id, readerAction: action.action?.status || "in_progress" };

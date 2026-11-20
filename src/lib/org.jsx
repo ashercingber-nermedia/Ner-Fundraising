@@ -67,9 +67,9 @@ export function OrgProvider({ children }) {
     if (!org) return;
     const t = org.theme || {};
     const root = document.documentElement.style;
-    root.setProperty("--brand-rgb", hexToRgb(t.brand, "26 45 90"));
-    root.setProperty("--gold-rgb", hexToRgb(t.accent, "201 162 39"));
-    root.setProperty("--canvas-rgb", hexToRgb(t.canvas, "237 232 225"));
+    root.setProperty("--brand-rgb", hexToRgb(t.brand, "15 23 42"));
+    root.setProperty("--gold-rgb", hexToRgb(t.accent, "197 160 89"));
+    root.setProperty("--canvas-rgb", hexToRgb(t.canvas, "248 245 240"));
     document.title = org.name;
   }, [org]);
 

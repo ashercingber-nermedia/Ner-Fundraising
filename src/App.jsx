@@ -3,24 +3,17 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { queryClientInstance } from "@/lib/query-client";
 import { OrgProvider, PLATFORM_HOME, Spinner, isPlatformHost, useOrg } from "@/lib/org";
-import CampaignPage from "@/pages/CampaignPage";
-import { AllDonationsPage, DonatePage, KioskPage, LegacyRedirect, LoginPage, ThankYouPage } from "@/pages/PublicPages";
+import CampaignPage, { OrgHome, ProjectorPage } from "@/pages/OrgPages";
+import { AllDonationsPage, CenterMessage, DonatePage, KioskPage, LegacyRedirect, LoginPage, ThankYouPage } from "@/pages/PublicPages";
 import { PlatformPage, StartPage } from "@/pages/PlatformPages";
 import SetupRecurring from "@/pages/SetupRecurring";
 import { AdminLayout, Dashboard, Donations } from "@/pages/admin/Admin";
 import { Campaigns, Members, Settings } from "@/pages/admin/Manage";
 import Setup from "@/pages/admin/Setup";
 import CreatePoster from "@/pages/admin/CreatePoster";
-import NerBadge from "@/components/NerBadge";
 
 function Message({ title, children }) {
-  return (
-    <div className="min-h-screen bg-[#ede8e1] flex flex-col items-center justify-center gap-3 p-8 text-center text-[#1a2d5a]">
-      <p className="text-2xl font-semibold">{title}</p>
-      {children && <p className="text-[#1a2d5a]/70 max-w-md">{children}</p>}
-      <NerBadge className="mt-4" />
-    </div>
-  );
+  return <CenterMessage title={title}>{children}</CenterMessage>;
 }
 
 // The platform itself: signup page and the Ner Media owner page.
@@ -55,8 +48,10 @@ function Site() {
   }
   return (
     <Routes>
-      <Route path="/" element={<CampaignPage />} />
+      <Route path="/" element={<OrgHome />} />
+      <Route path="/screen" element={<ProjectorPage />} />
       <Route path="/c/:slug" element={<CampaignPage />} />
+      <Route path="/c/:slug/screen" element={<ProjectorPage />} />
       <Route path="/c/:slug/donate" element={<DonatePage />} />
       <Route path="/c/:slug/all" element={<AllDonationsPage />} />
       <Route path="/all" element={<AllDonationsPage />} />

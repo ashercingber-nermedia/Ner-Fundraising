@@ -55,7 +55,7 @@ export default function SpinWheel({ tickets = 360, result, onDone, size = 360 })
             </linearGradient>
           </defs>
           <circle cx={r} cy={r} r={r - 1} fill="url(#rimGold)" />
-          <circle cx={r} cy={r} r={R + 2} fill="#0d1733" />
+          <circle cx={r} cy={r} r={R + 2} style={{ fill: "rgb(var(--brand-rgb))" }} />
           {Array.from({ length: SLICES }, (_, i) => {
             const [x, y] = at(i * slice, r - rim / 2);
             return <circle key={i} cx={x} cy={y} r={rim * 0.24} fill="#fff8dc" style={{ animation: `wheel-bulb 1s ${i % 2 ? "0s" : ".5s"} infinite` }} />;
@@ -68,7 +68,7 @@ export default function SpinWheel({ tickets = 360, result, onDone, size = 360 })
           style={{ transform: `rotate(${angle}deg)`, transition: `transform ${SPIN_MS}ms cubic-bezier(0.1, 0.72, 0.08, 1)` }}
         >
           <defs>
-            <radialGradient id="faceNavy" cx="50%" cy="50%" r="50%"><stop offset=".25" stopColor="#2a4488" /><stop offset="1" stopColor="#15244c" /></radialGradient>
+            <radialGradient id="faceNavy" cx="50%" cy="50%" r="50%"><stop offset=".25" style={{ stopColor: "rgb(var(--brand-rgb) / .82)" }} /><stop offset="1" style={{ stopColor: "rgb(var(--brand-rgb))" }} /></radialGradient>
             <radialGradient id="faceCream" cx="50%" cy="50%" r="50%"><stop offset=".25" stopColor="#fffdf5" /><stop offset="1" stopColor="#eadfc0" /></radialGradient>
             <radialGradient id="hub" cx="35%" cy="30%" r="80%"><stop offset="0" stopColor="#fff3c4" /><stop offset=".5" stopColor="#c9a227" /><stop offset="1" stopColor="#6e520b" /></radialGradient>
           </defs>
@@ -80,7 +80,7 @@ export default function SpinWheel({ tickets = 360, result, onDone, size = 360 })
             return (
               <g key={i}>
                 <path d={`M${r},${r} L${x1},${y1} A${R},${R} 0 0 1 ${x2},${y2} Z`} fill={dark ? "url(#faceNavy)" : "url(#faceCream)"} stroke="#c9a227" strokeWidth="1.2" />
-                <text x={tx} y={ty} fill={dark ? "#f6e29a" : "#15244c"} fontSize={size / 21} fontWeight="800" fontFamily="Georgia, 'Times New Roman', serif"
+                <text x={tx} y={ty} style={{ fill: dark ? "#f6e29a" : "rgb(var(--brand-rgb))" }} fontSize={size / 21} fontWeight="800" fontFamily="Georgia, 'Times New Roman', serif"
                   textAnchor="middle" dominantBaseline="middle" transform={`rotate(${(i + 0.5) * slice + 90}, ${tx}, ${ty})`}>
                   {n}
                 </text>
@@ -99,8 +99,8 @@ export default function SpinWheel({ tickets = 360, result, onDone, size = 360 })
       </div>
 
       {/* ticket readout */}
-      <div className="mt-5 mx-auto rounded-xl bg-[#0d1733] border-2 border-[#c9a227] px-6 py-3 text-center shadow-lg" style={{ maxWidth: size * 0.8, animation: landed ? "wheel-pop .5s" : "none" }}>
-        <p className="text-[11px] tracking-[0.3em] text-[#c9a227] uppercase">{landed ? "Your ticket" : "Ticket"}</p>
+      <div className="mt-5 mx-auto rounded-xl bg-brand border-2 border-gold px-6 py-3 text-center shadow-lg" style={{ maxWidth: size * 0.8, animation: landed ? "wheel-pop .5s" : "none" }}>
+        <p className="text-[11px] tracking-[0.3em] text-gold uppercase">{landed ? "Your ticket" : "Ticket"}</p>
         <p className="font-mono text-4xl font-bold text-[#fff3c4] tabular-nums leading-tight">
           {readout == null ? "– – –" : `#${readout}`}
         </p>

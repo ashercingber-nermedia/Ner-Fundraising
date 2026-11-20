@@ -1,24 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, CheckCircle, Loader2, Mail, WifiOff } from "lucide-react";
+import { ArrowLeft, CircleCheck, Loader2, Mail, ShieldCheck, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import DonateFlow from "@/components/DonateFlow";
 import NerBadge from "@/components/NerBadge";
+import SiteLayout, { Progress, Subhead, typeTag } from "@/components/SiteLayout";
 import { paymentsReady } from "@/pages/admin/Setup";
 import { useOrg, useCampaigns, useFeed, Spinner } from "@/lib/org";
 import { api, money, supabase } from "@/lib/supabase";
-
-function Footer({ org }) {
-  return (
-    <div className="mt-8 text-center text-brand/50 text-xs">
-      <p className="font-medium">{org.name}</p>
-      {org.address && <p>{org.address}</p>}
-      {org.tax_id && <p>Tax ID: {org.tax_id}</p>}
-    </div>
-  );
-}
 
 // ───────────── Donate (web) ─────────────
 export function DonatePage() {
@@ -27,40 +18,39 @@ export function DonatePage() {
   const { org } = useOrg();
   const { bySlug, isLoading } = useCampaigns();
   const campaign = bySlug(slug);
+  const { data: feed } = useFeed(campaign?.id, 30000);
   if (isLoading) return <Spinner />;
-  if (!campaign || !campaign.is_active) return <div className="min-h-screen bg-canvas flex items-center justify-center text-brand/60">This campaign is not available.</div>;
+  if (!campaign || !campaign.is_active) return <SiteLayout><div className="wrap center-page"><div className="panel"><h2>This campaign is not available</h2><Link to="/" className="ner-btn">Back to home</Link></div></div></SiteLayout>;
   const amount = parseFloat(params.get("amount"));
   const open = paymentsReady(org) || (org.donors_fund_enabled && campaign.type === "regular");
+  const raised = Number(feed?.raised || 0), goal = Number(campaign.goal_amount || 0);
+  const title = campaign.type === "membership" ? "Become a member" : campaign.type === "spin_raffle" ? "Spin to give" : "Complete your gift";
   return (
-    <div className="min-h-screen bg-canvas pb-16">
-      <NerBadge fixed />
-      <div className="bg-white/60 border-b border-brand/10">
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          <Link to={`/c/${campaign.slug}`} className="inline-flex items-center gap-2 text-brand hover:opacity-70">
-            <ArrowLeft className="w-5 h-5" /><span className="font-medium">Back</span>
-          </Link>
-        </div>
-      </div>
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl md:text-3xl font-light text-brand">
-            {campaign.type === "membership" ? "Become a member of" : campaign.type === "spin_raffle" ? "Spin to support" : "Yes! I would like to support"}
-          </h1>
-          <h2 className="text-3xl md:text-4xl font-semibold text-brand mt-2">{org.name}!</h2>
-        </div>
-        <Card className="bg-white/90 shadow-xl rounded-2xl">
-          <CardContent className="p-6 md:p-8">
+    <SiteLayout nav={false}>
+      <div className="wrap screen">
+        <Link to={`/c/${campaign.slug}`} className="back-link"><ArrowLeft size={16} /> Back to {campaign.name}</Link>
+        <Subhead label={org.name} title={title} />
+        <div className="screen-grid checkout-grid">
+          <section className="panel">
             {!open ? (
-              <div className="text-center py-10 space-y-2">
-                <p className="text-xl font-semibold text-brand">Online donations open soon</p>
-                <p className="text-brand/70">{org.name} is finishing setting up its donation page. Please check back shortly.</p>
+              <div className="center" style={{ padding: "30px 0" }}>
+                <h2>Online donations open soon</h2>
+                <p className="muted">{org.name} is finishing setting up its donation page. Please check back shortly.</p>
               </div>
-            ) : <DonateFlow org={org} campaign={campaign} mode="web" resumeSpinId={params.get("spin")} prefill={{ amount: amount > 0 ? amount : null, monthly: params.get("monthly") === "1" }} />}
-          </CardContent>
-        </Card>
-        <Footer org={org} />
+            ) : <DonateFlow org={org} campaign={campaign} mode="web" resumeSpinId={params.get("spin")} prefill={{ amount: amount > 0 ? amount : null, monthly: params.get("monthly") === "1", tierId: params.get("tier") }} />}
+          </section>
+          <aside className="panel checkout-summary">
+            <div className="eyebrow">{typeTag[campaign.type]}</div>
+            <h2>{campaign.name}</h2>
+            <div className="impact-number" style={{ fontSize: 44 }}>{money(raised)}</div>
+            <p className="muted">{goal > 0 ? `raised of ${money(goal)} goal` : "raised so far"}</p>
+            {goal > 0 && <Progress raised={raised} goal={goal} />}
+            <div className="note"><ShieldCheck size={17} style={{ flex: "none" }} /> Card payments are processed securely by Stripe. Your receipt is emailed to you.</div>
+            {org.tax_id && <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>{org.legal_name || org.name} · Tax ID {org.tax_id}</p>}
+          </aside>
+        </div>
       </div>
-    </div>
+    </SiteLayout>
   );
 }
 
@@ -93,42 +83,35 @@ export function KioskPage() {
   }, [allowed]);
 
   if (isLoading || allowed === null) return <Spinner />;
-  if (!allowed) return <div className="min-h-screen bg-canvas flex items-center justify-center p-8 text-center text-brand">This kiosk link is not valid. Ask an admin for a new kiosk link.</div>;
+  if (!allowed) return <CenterMessage title="This kiosk link is not valid">Ask an admin for a new kiosk link.</CenterMessage>;
   const active = campaigns.filter((c) => c.is_active);
   const campaign = active.find((c) => c.slug === slug) || defaultCampaign;
-  if (!campaign) return <div className="min-h-screen bg-canvas flex items-center justify-center text-brand/60">No active campaign.</div>;
+  if (!campaign) return <CenterMessage title="No active campaign" />;
   const goal = Number(campaign.goal_amount || 0);
+  const raised = Number(feed?.raised || 0);
+  const welcome = campaign.type === "membership" ? "Membership" : campaign.type === "spin_raffle" ? "Spin raffle" : "Give";
 
   return (
-    <div className="min-h-screen bg-canvas p-4 md:p-8 pb-16">
-      <NerBadge fixed />
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-          <h1 className="text-2xl font-semibold text-brand">{org.name}</h1>
-          <div className="flex items-center gap-2">
-            {active.length > 1 && (
-              <select value={campaign.slug} onChange={(e) => setSlug(e.target.value)} className="h-9 rounded-md border border-brand/30 bg-white px-2 text-sm text-brand">
-                {active.map((c) => <option key={c.id} value={c.slug}>{c.name}</option>)}
-              </select>
-            )}
-            <span className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full ${reader?.online ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
-              {!reader?.online && <WifiOff className="w-3 h-3" />}Reader {reader?.online ? "ready" : reader?.status === "not_configured" ? "not set up" : "offline"}
-            </span>
-          </div>
+    <SiteLayout nav={false} className="kiosk">
+      <div className="wrap screen">
+        <div className="kiosk-top">
+          {active.length > 1 ? (
+            <label className="field" style={{ margin: 0 }}><select value={campaign.slug} onChange={(e) => setSlug(e.target.value)}>{active.map((c) => <option key={c.id} value={c.slug}>{c.name}</option>)}</select></label>
+          ) : <span />}
+          <span className={`pill ${reader?.online ? "ok" : "bad"}`}>{!reader?.online && <WifiOff size={13} />}Card reader {reader?.online ? "ready" : reader?.status === "not_configured" ? "not set up" : "offline"}</span>
         </div>
+        <Subhead label={`Welcome to ${org.name}`} title={campaign.name}>{welcome === "Give" ? "Give in person. Tap your card on the reader." : welcome === "Membership" ? "Find your name or join, then tap your card." : "Authorize your card, then press the big red button."}</Subhead>
         {goal > 0 && (
-          <div className="mb-4">
-            <div className="flex justify-between text-sm text-brand mb-1"><span>{campaign.name}</span><span>{money(feed?.raised)} of {money(goal)}</span></div>
-            <div className="h-3 bg-brand/10 rounded-full overflow-hidden"><div className="h-full bg-gold" style={{ width: `${Math.min((Number(feed?.raised || 0) / goal) * 100, 100)}%` }} /></div>
+          <div className="kiosk-panel" style={{ marginBottom: 16 }}>
+            <div className="goal-line"><strong>{money(raised)}</strong><small>of {money(goal)}</small></div>
+            <Progress raised={raised} goal={goal} />
           </div>
         )}
-        <Card className="bg-white shadow-xl rounded-2xl">
-          <CardContent className="p-6 md:p-8">
-            <DonateFlow key={campaign.id} org={org} campaign={campaign} mode="kiosk" kioskKey={key} />
-          </CardContent>
-        </Card>
+        <section className="panel kiosk-panel">
+          <DonateFlow key={campaign.id} org={org} campaign={campaign} mode="kiosk" kioskKey={key} />
+        </section>
       </div>
-    </div>
+    </SiteLayout>
   );
 }
 
@@ -142,28 +125,26 @@ export function AllDonationsPage() {
   if (!campaign) return <Navigate to="/" replace />;
   const list = [...(feed?.donations || [])].sort((a, b) => b.amount - a.amount);
   return (
-    <div className="min-h-screen bg-canvas p-6 pb-16">
-      <NerBadge fixed />
-      <div className="max-w-4xl mx-auto">
-        <Link to={`/c/${campaign.slug}`}><Button variant="outline" size="sm" className="mb-4"><ArrowLeft className="w-4 h-4 mr-2" />Back</Button></Link>
-        <h1 className="text-3xl font-light text-brand text-center mb-6">{campaign.name}</h1>
-        <div className="grid md:grid-cols-3 gap-3">
-          {list.map((d) => (
-            <div key={d.id} className="bg-white/80 rounded-lg p-4 shadow-sm border border-gold/30 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-brand font-medium text-lg truncate">{d.display_name}</p>
-                {d.parnas_sponsor && <p className="text-gold text-sm">Sponsored by: {d.parnas_sponsor}</p>}
-                {d.dedication_type !== "none" && d.dedication_message && (
-                  <p className="text-brand/50 text-sm italic truncate">{d.dedication_type === "in_honor" ? "In Honor Of: " : d.dedication_type === "in_memory" ? "In Memory Of: " : ""}{d.dedication_message}</p>
-                )}
+    <SiteLayout>
+      <div className="wrap screen">
+        <Link to={`/c/${campaign.slug}`} className="back-link"><ArrowLeft size={16} /> Back</Link>
+        <Subhead label="Our community" title={campaign.name} />
+        <section className="panel">
+          <div className="member-list" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", columnGap: 24 }}>
+            {list.map((d) => (
+              <div key={d.id} className="member-row donor-row">
+                <span>{d.display_name}
+                  {d.parnas_sponsor && <small>Sponsored by: {d.parnas_sponsor}</small>}
+                  {d.dedication_type !== "none" && d.dedication_message && <span className="ded">{d.dedication_type === "in_honor" ? "In honor of " : d.dedication_type === "in_memory" ? "In memory of " : ""}{d.dedication_message}</span>}
+                </span>
+                <strong>{d.tier_name || (d.ticket_number ? `#${d.ticket_number}` : money(d.amount))}</strong>
               </div>
-              <p className="text-xl text-gold font-light">{d.tier_name || money(d.amount)}</p>
-            </div>
-          ))}
-        </div>
-        {list.length === 0 && <p className="text-center text-brand/40 py-12">Nothing here yet.</p>}
+            ))}
+          </div>
+          {list.length === 0 && <p className="muted center">Nothing here yet.</p>}
+        </section>
       </div>
-    </div>
+    </SiteLayout>
   );
 }
 
@@ -173,17 +154,30 @@ export function ThankYouPage() {
   const [params] = useSearchParams();
   const c = params.get("c");
   return (
-    <div className="min-h-screen bg-canvas flex items-center justify-center px-4">
-      <NerBadge fixed />
-      <div className="text-center max-w-md">
-        <div className="bg-white rounded-full p-6 inline-block mb-6 shadow"><CheckCircle className="w-20 h-20 text-green-600" /></div>
-        <h1 className="text-3xl font-bold text-brand mb-4">Thank You for Your Donation!</h1>
-        <p className="text-brand/80 mb-8">Your generous support helps {org.name} continue its mission. If you entered an email, a receipt is on its way.</p>
-        <div className="flex flex-col gap-3">
-          <Link to={c ? `/c/${c}` : "/"}><Button className="w-full bg-brand hover:bg-brand/90">Return to Home</Button></Link>
-          {c && <Link to={`/c/${c}/donate`}><Button variant="outline" className="w-full">Make Another Donation</Button></Link>}
+    <SiteLayout>
+      <div className="wrap center-page">
+        <div className="panel">
+          <CircleCheck size={56} className="done-icon" />
+          <div className="eyebrow">Thank you</div>
+          <h2 style={{ fontSize: 46 }}>Tizku L’Mitzvos</h2>
+          <p className="muted" style={{ margin: "10px 0 22px" }}>Your generous support helps {org.name} continue its work. If you entered an email, a receipt is on its way.</p>
+          <div style={{ display: "grid", gap: 10 }}>
+            <Link to={c ? `/c/${c}` : "/"} className="ner-btn">Back to the campaign</Link>
+            {c && <Link to={`/c/${c}/donate`} className="ner-btn ghost">Make another gift</Link>}
+          </div>
         </div>
       </div>
+    </SiteLayout>
+  );
+}
+
+export function CenterMessage({ title, children }) {
+  return (
+    <div className="ner">
+      <div className="wrap center-page">
+        <div className="panel"><h2>{title}</h2>{children && <p className="muted">{children}</p>}</div>
+      </div>
+      <NerBadge fixed />
     </div>
   );
 }

@@ -31,6 +31,7 @@ export function AdminLayout() {
             <NavLink to="/admin/members" className={tab}>Members</NavLink>
             <NavLink to="/admin/poster" className={tab}>Poster</NavLink>
             <NavLink to="/admin/settings" className={tab}>Settings</NavLink>
+            <a href="/screen" target="_blank" rel="noopener" className="px-3 py-2 rounded-md text-sm font-medium text-brand hover:bg-brand/10 inline-flex items-center gap-1"><Monitor className="w-4 h-4" />Projector</a>
             <button onClick={signOut} className="px-3 py-2 text-sm text-brand/60 hover:text-brand">Sign out</button>
           </nav>
         </div>

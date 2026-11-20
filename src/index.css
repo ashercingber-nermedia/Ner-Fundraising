@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 /* Organization colors; replaced at runtime from each organization's theme */
-:root { --brand-rgb: 26 45 90; --gold-rgb: 201 162 39; --canvas-rgb: 237 232 225; }
+:root { --brand-rgb: 15 23 42; --gold-rgb: 197 160 89; --canvas-rgb: 248 245 240; }
+body { font-family: Inter, system-ui, sans-serif; }
 
 
 
